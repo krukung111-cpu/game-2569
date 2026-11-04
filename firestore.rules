@@ -1,0 +1,51 @@
+rules_version = '2';
+service cloud.firestore {
+ match /databases/{database}/documents {
+  function signed() { return request.auth != null; }
+  function owner(uid) { return signed() && request.auth.uid == uid; }
+  function teacher() { return signed() && exists(/databases/$(database)/documents/teachers/$(request.auth.uid)) && get(/databases/$(database)/documents/teachers/$(request.auth.uid)).data.enabled == true; }
+  function value(v) { return v == null ? 0 : v; }
+  function validValue(v) { return v == null || (v is int && v >= 0 && v <= 3); }
+  function validBest(b) {
+   return b is list && b.size() == 5 && validValue(b[0]) && validValue(b[1]) && validValue(b[2]) && validValue(b[3]) && validValue(b[4])
+    && (b[1] == null || b[0] != null) && (b[2] == null || b[1] != null) && (b[3] == null || b[2] != null) && (b[4] == null || b[3] != null);
+  }
+  function stars(b) { return value(b[0])+value(b[1])+value(b[2])+value(b[3])+value(b[4]); }
+  function improve(old, next) { return old == null || (next != null && next >= old); }
+  function validStudent(s) {
+   return s.keys().hasAll(['name','room','number','best','updated']) && s.keys().hasOnly(['name','room','number','best','updated'])
+    && s.name is string && s.name.size() >= 3 && s.name.size() <= 100 && s.name.matches('^[^ ]+ .+$')
+    && s.room is string && s.room.matches('^ม[.]1/[1-9][0-9]?$') && s.number is int && s.number >= 1 && s.number <= 99
+    && validBest(s.best) && s.updated == request.time;
+  }
+  function publicMatches(uid,s) {
+   let p = getAfter(/databases/$(database)/documents/leaderboard/$(uid)).data;
+   return p.keys().hasAll(['name','room','stars','score']) && p.keys().hasOnly(['name','room','stars','score'])
+    && p.name == s.name.split(' ')[0] && p.room == s.room && p.stars == stars(s.best) && p.score == stars(s.best)*100;
+  }
+  match /students/{uid} {
+   allow get: if owner(uid) || teacher();
+   allow list: if teacher() && request.query.limit != null && request.query.limit <= 1000;
+   allow create: if owner(uid) && validStudent(request.resource.data) && request.resource.data.best == [null,null,null,null,null]
+    && getAfter(/databases/$(database)/documents/roster/$(request.resource.data.room.replace('/','-')+'-'+string(request.resource.data.number))).data.uid == uid
+    && publicMatches(uid,request.resource.data);
+   allow update: if owner(uid) && validStudent(request.resource.data)
+    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['best','updated'])
+    && improve(resource.data.best[0],request.resource.data.best[0]) && improve(resource.data.best[1],request.resource.data.best[1])
+    && improve(resource.data.best[2],request.resource.data.best[2]) && improve(resource.data.best[3],request.resource.data.best[3]) && improve(resource.data.best[4],request.resource.data.best[4])
+    && publicMatches(uid,request.resource.data);
+  }
+  match /leaderboard/{uid} {
+   allow get: if signed();
+   allow list: if signed() && request.query.limit != null && request.query.limit <= 30;
+   allow create, update: if owner(uid) && publicMatches(uid,getAfter(/databases/$(database)/documents/students/$(uid)).data);
+  }
+  match /roster/{slot} {
+   allow get: if signed();
+   allow create: if signed() && request.resource.data.keys().hasOnly(['uid']) && request.resource.data.uid == request.auth.uid
+    && slot == getAfter(/databases/$(database)/documents/students/$(request.auth.uid)).data.room.replace('/','-')+'-'+string(getAfter(/databases/$(database)/documents/students/$(request.auth.uid)).data.number);
+  }
+  match /teachers/{uid} { allow get: if owner(uid); }
+  match /{document=**} { allow read,write: if false; }
+ }
+}

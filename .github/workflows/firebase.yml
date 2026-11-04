@@ -1,0 +1,46 @@
+name: Test and deploy Firebase
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: "Deploy to the configured Firebase project (Spark: Hosting and Firestore only)"
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm ci --prefix tools
+      - run: npm test
+      - run: npm install --global firebase-tools@14
+      - run: node scripts/build-firebase.cjs
+      - run: firebase emulators:exec --only auth,firestore,hosting --project demo-career-quest "node scripts/verify-spark.cjs"
+  deploy:
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy
+    needs: test
+    runs-on: ubuntu-latest
+    environment: firebase-production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}'
+      - run: npm ci --prefix tools
+      - run: npm install --global firebase-tools@14
+      - run: firebase deploy --only hosting,firestore --project "$FIREBASE_PROJECT_ID" --non-interactive
+        env:
+          FIREBASE_PROJECT_ID: "${{ vars.FIREBASE_PROJECT_ID || 'game01-d361e' }}"
